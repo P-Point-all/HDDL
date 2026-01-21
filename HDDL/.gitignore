@@ -1,0 +1,5 @@
+*.pt
+/oxford-iiit-pet
+/data
+/.vscode
+*.pth
