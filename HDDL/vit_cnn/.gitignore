@@ -1,0 +1,7 @@
+food-101/
+GTSRB/
+__pycache__
+models/__pycache__
+weights/
+tiny-imagenet-200/
+*.zip
