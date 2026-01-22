@@ -103,76 +103,6 @@ def compute_datasets_dataloaders(dataset_path,batch_size,train_size=0.7,val_size
 
     return full_dataset,trainset,valset,testset,trainloader,valoader,testloader
 
-def compute_datasets_dataloaders_imagenet(dataset_path, batch_size, data_augmentation=False, strong_data_augmentation=False):
-    """
-    Charge les données Tiny ImageNet (Train et Val uniquement).
-    Le dossier 'val' doit avoir été structuré par classe au préalable.
-    """
-    
-    # 1. Définition des transformations
-    
-    # Normalisation standard ImageNet
-    mean_stats = [0.485, 0.456, 0.406]
-    std_stats  = [0.229, 0.224, 0.225]
-
-    # Transformation de base (Validation) : Juste Redimensionnement + Normalisation
-    transform_val = transforms.Compose([
-        transforms.Resize((224, 224)), # Obligatoire pour ViT / ResNet
-        transforms.ToTensor(),
-        transforms.Normalize(mean=mean_stats, std=std_stats)
-    ])
-
-    # Transformation pour le Train (Selon le niveau d'augmentation choisi)
-    if strong_data_augmentation:
-        print(f"Mode: Strong Data Augmentation (RandAugment + Erasing)")
-        transform_train = transforms.Compose([
-            transforms.RandomResizedCrop(224, scale=(0.08, 1.0)),
-            transforms.RandomHorizontalFlip(),
-            # RandAugment est très efficace pour les ViT
-            transforms.RandAugment(num_ops=2, magnitude=9), 
-            transforms.ToTensor(),
-            transforms.Normalize(mean=mean_stats, std=std_stats),
-            transforms.RandomErasing(p=0.25) 
-        ])
-        
-    elif data_augmentation:
-        print(f"Mode: Standard Data Augmentation")
-        transform_train = transforms.Compose([
-            transforms.RandomRotation(degrees=10),
-            transforms.RandomResizedCrop(224, scale=(0.08, 1.0)),
-            transforms.RandomHorizontalFlip(),
-            transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=mean_stats, std=std_stats)
-        ])
-        
-    else:
-        print(f"Mode: No Data Augmentation (Baseline)")
-        transform_train = transform_val
-
-    # 2. Chargement des Datasets via ImageFolder
-    train_dir = os.path.join(dataset_path, 'train')
-    val_dir = os.path.join(dataset_path, 'val')
-
-    # ImageFolder scanne les sous-dossiers pour créer les classes
-    trainset = datasets.ImageFolder(root=train_dir, transform=transform_train)
-    valset = datasets.ImageFolder(root=val_dir, transform=transform_val)
-
-    # 3. Création des DataLoaders
-    # num_workers=4 et pin_memory=True accélèrent le transfert vers le GPU
-    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
-    valoader = DataLoader(valset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
-
-    print("-" * 30)
-    print(f"Données chargées depuis : {dataset_path}")
-    print(f"Classes détectées : {len(trainset.classes)}")
-    print(f"Images d'entraînement : {len(trainset)}")
-    print(f"Images de validation : {len(valset)}")
-    print("-" * 30)
-
-    return trainset, valset, trainloader, valoader
-
-
 def plot_dataset_distribution(full_dataset, train_set, val_set, test_set):
 
     
@@ -223,6 +153,148 @@ def plot_dataset_distribution(full_dataset, train_set, val_set, test_set):
     plt.tight_layout()
     plt.show()
 
+
+    print("--- Récapitulatif ---")
+    print(df.groupby('Set')['Nombre'].sum())
+
+def compute_datasets_dataloaders_imagenet(dataset_path, batch_size, data_augmentation=False, strong_data_augmentation=False):
+    """
+    Charge Tiny ImageNet en respectant les dossiers existants (train/val).
+    Note: 'val' sert de jeu de test car le dossier 'test' officiel n'a pas de labels.
+    """
+
+    # 1. Définition des constantes de Normalisation (ImageNet standard)
+    mean_stats = [0.485, 0.456, 0.406]
+    std_stats  = [0.229, 0.224, 0.225]
+
+    # 2. Transformation pour la VALIDATION (et TEST)
+    # Juste le redimensionnement et la normalisation. Pas de bruit.
+    transform_val = transforms.Compose([
+        transforms.Resize((224, 224)), # Indispensable pour ViT
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean_stats, std=std_stats)
+    ])
+
+    # 3. Transformation pour l'ENTRAÎNEMENT (Data Augmentation)
+    if strong_data_augmentation:
+        print("Mode: Strong Data Augmentation (RandAugment + Erasing)")
+        transform_train = transforms.Compose([
+            transforms.RandomResizedCrop(224, scale=(0.08, 1.0)),
+            transforms.RandomHorizontalFlip(),
+            # RandAugment : Très efficace pour les Vision Transformers
+            transforms.RandAugment(num_ops=2, magnitude=9), 
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean_stats, std=std_stats),
+            transforms.RandomErasing(p=0.25) 
+        ])
+        
+    elif data_augmentation:
+        print("Mode: Standard Data Augmentation")
+        transform_train = transforms.Compose([
+            transforms.RandomRotation(degrees=10),
+            transforms.RandomResizedCrop(224, scale=(0.08, 1.0)),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean_stats, std=std_stats)
+        ])
+        
+    else:
+        print("Mode: No Data Augmentation (Baseline)")
+        transform_train = transform_val
+
+    # 4. Chargement des données (Mapping Dossiers -> Datasets)
+    # On pointe directement vers les sous-dossiers
+    train_dir = os.path.join(dataset_path, 'train')
+    val_dir = os.path.join(dataset_path, 'val') # (Celui que nous avons trié)
+
+    # ImageFolder scanne les sous-dossiers pour créer les classes automatiquement
+    trainset = datasets.ImageFolder(root=train_dir, transform=transform_train)
+    valset   = datasets.ImageFolder(root=val_dir, transform=transform_val)
+
+    # 5. Création des DataLoaders
+    # num_workers=4 et pin_memory=True pour accélérer le transfert GPU
+    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    valoader    = DataLoader(valset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+
+    # Affichage des infos
+    print("-" * 30)
+    print(f"Chargement depuis : {dataset_path}")
+    print(f"Train images : {len(trainset)} (Classes: {len(trainset.classes)})")
+    print(f"Val images   : {len(valset)}   (Classes: {len(valset.classes)})")
+    print("-" * 30)
+
+    # Note : On ne retourne plus 'testset' car le dossier test officiel est vide de labels.
+    # On utilise 'valset' pour valider ET tester.
+    return trainset, valset, trainloader, valoader
+
+def plot_dataset_distribution_imagenet(train_set, val_set, test_set=None):
+    
+    # On récupère les noms des classes depuis le trainset (supposé complet)
+    class_names = train_set.classes
+    
+    def get_counts(dataset, split_name):
+        if dataset is None:
+            return []
+            
+        # ImageFolder contient directement les targets dans .targets
+        # Plus besoin de passer par des indices
+        targets = np.array(dataset.targets)
+        unique, counts = np.unique(targets, return_counts=True)
+        
+        # On crée un dictionnaire {index: count}
+        counts_map = dict(zip(unique, counts))
+        
+        data = []
+        # On parcourt toutes les classes pour être sûr d'avoir 0 si une classe est manquante
+        for idx, cls_name in enumerate(class_names):
+            count = counts_map.get(idx, 0)
+            data.append({'Classe': cls_name, 'Nombre': count, 'Set': split_name})
+            
+        return data
+
+    # Construction de la liste de données
+    data_list = []
+    data_list.extend(get_counts(train_set, 'Train'))
+    data_list.extend(get_counts(val_set, 'Val (Test)'))
+    
+    # Si un test_set est fourni (optionnel)
+    if test_set is not None:
+        data_list.extend(get_counts(test_set, 'Test'))
+    
+    df = pd.DataFrame(data_list)
+    
+    # --- PLOTTING ---
+    # Note : Pour Tiny ImageNet (200 classes), 50 pouces de large est nécessaire.
+    fig, axes = plt.subplots(2, 1, figsize=(50, 25))
+    
+    # Graphique 1 : Total
+    df_total = df.groupby('Classe')['Nombre'].sum().reset_index()
+    sns.barplot(data=df_total, x='Classe', y='Nombre', ax=axes[0], palette='viridis')
+    axes[0].set_title("Répartition dataset complet", fontsize=24, pad=20)
+    axes[0].set_ylabel("Nombre d'images", fontsize=20)
+    
+    # Gestion de l'affichage des 200 labels (rotation et taille)
+    axes[0].tick_params(axis='x', rotation=90, labelsize=10) # Labelsize réduit pour 200 classes
+    axes[0].tick_params(axis='y', labelsize=20)
+    
+    # Labels sur les barres (optionnel, peut surcharger si 200 classes)
+    # On ne l'active que si c'est lisible
+    if len(class_names) < 50:
+        for container in axes[0].containers:
+            axes[0].bar_label(container)
+
+    # Graphique 2 : Par Split
+    sns.barplot(data=df, x='Classe', y='Nombre', hue='Set', ax=axes[1], palette='magma')
+    axes[1].set_title("Répartition par jeu de données", fontsize=24, pad=20)
+    axes[1].set_ylabel("Nombre d'images", fontsize=20)
+    axes[1].tick_params(axis='x', rotation=90, labelsize=10)
+    axes[1].tick_params(axis='y', labelsize=20)
+    
+    axes[1].legend(fontsize=20, title="Jeu de données", title_fontsize=20)
+    
+    plt.tight_layout()
+    plt.show()
 
     print("--- Récapitulatif ---")
     print(df.groupby('Set')['Nombre'].sum())
