@@ -1,0 +1,387 @@
+import os
+import numpy as np
+import pandas as pd
+import torch
+from torchvision.datasets import ImageFolder
+from torch.utils.data import DataLoader
+from torchvision import datasets, transforms, models
+from torch.utils.data import random_split
+import matplotlib.pyplot as plt
+import seaborn as sns
+import torchvision.transforms.functional as F
+from PIL import Image
+import math
+
+def compute_datasets_dataloaders(dataset_path,batch_size,train_size=0.7,val_size=0.1,data_augmentation=False,strong_data_augmentation=False):
+
+    #transformations
+    transform = transforms.Compose([
+        transforms.Resize((224,224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) #valeurs de images net, à eventuelleme adapter en fonction de nos data surtout pour les vit
+    ])
+
+    full_dataset = ImageFolder(root=dataset_path, transform=transform)
+
+    if (data_augmentation or strong_data_augmentation):
+
+        if strong_data_augmentation :
+
+            transform_train = transforms.Compose([
+                transforms.RandomResizedCrop(224, scale=(0.08, 1.0)),
+                transforms.RandomHorizontalFlip(),
+                # Automated Augmentation (Replaces Rotation/ColorJitter), applies random strong distortions (shear, contrast, sharpness, etc.)
+                transforms.RandAugment(num_ops=2, magnitude=9),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]), #standard values used by ImageNet
+                
+                #  Random Erasing (Regularization) randomly blacks out a rectangle of the image
+                transforms.RandomErasing(p=0.25) 
+            ])
+        else :
+        #data augmentation pour le train
+            transform_train = transforms.Compose([
+                transforms.RandomRotation(degrees=10),
+                transforms.RandomResizedCrop(224, scale=(0.08,1.0)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) #valeurs de images net, à eventuelleme adapter en fonction de nos data surtout pour les vit
+            ])
+
+        augmented_full_dataset = ImageFolder(root=dataset_path, transform=transform_train)
+        full_dataset = ImageFolder(root=dataset_path, transform=transform)
+
+        np.random.seed(42)
+
+        #division en train, validation et test, sans data augmentation sur  validation et test
+        total_size = len(augmented_full_dataset)
+        indices = list(range(total_size))
+        split = int((train_size+val_size) * total_size)
+        np.random.shuffle(indices)
+
+        train_idx, test_idx = indices[:split], indices[split:]
+
+        split = int(train_size * total_size)
+        np.random.shuffle(train_idx)
+
+        train_idx, val_idx = train_idx[:split], train_idx[split:]
+    
+        """
+        Vérification que les ensembles sont bien disjoints : ok
+        print(set(train_idx) & set(test_idx))
+        print(set(train_idx) & set(val_idx))
+        print(set(val_idx) & set(test_idx))
+        """
+
+        trainset = torch.utils.data.Subset(augmented_full_dataset, train_idx)
+        valset = torch.utils.data.Subset(full_dataset, val_idx)
+        testset = torch.utils.data.Subset(full_dataset, test_idx)
+
+    else :
+
+        total_len = len(full_dataset)
+        train_len = int(0.7 * total_len)
+        val_len   = int(0.1 * total_len)
+        test_len  = total_len - train_len - val_len  
+
+
+        generator = torch.Generator().manual_seed(42)
+
+        trainset, valset, testset = random_split(full_dataset, [train_len, val_len, test_len],
+            generator=generator
+        )
+
+
+    print(f"Total: {len(full_dataset)}")
+    print(f"Train: {len(trainset)} images")
+    print(f"Val:   {len(valset)} images")
+    print(f"Test:  {len(testset)} images")
+
+
+    trainloader = DataLoader(trainset, batch_size=batch_size,shuffle=True,  num_workers=4)
+    valoader = DataLoader(valset, batch_size=batch_size, shuffle=False, num_workers=4)
+    testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=4)
+
+    return full_dataset,trainset,valset,testset,trainloader,valoader,testloader
+
+
+
+
+class ResizeWithPad:
+    def __init__(self, target_size, fill=0):
+        self.target_size = target_size
+        self.fill = fill
+
+    def __call__(self, img):
+        """
+        Args:
+            img (PIL Image): Image à redimensionner et padder.
+        Returns:
+            PIL Image: Image carrée (target_size x target_size).
+        """
+        original_width, original_height = img.size
+        
+        # 1. Calcul du ratio pour redimensionner en gardant les proportions
+        ratio = float(self.target_size) / max(original_width, original_height)
+        new_width = int(original_width * ratio)
+        new_height = int(original_height * ratio)
+        
+        # 2. Redimensionnement (Resize)
+        img = F.resize(img, [new_height, new_width])
+        
+        # 3. Calcul du padding nécessaire pour rendre l'image carrée
+        delta_w = self.target_size - new_width
+        delta_h = self.target_size - new_height
+        
+        padding_left = delta_w // 2
+        padding_top = delta_h // 2
+        padding_right = delta_w - padding_left
+        padding_bottom = delta_h - padding_top
+        
+        # 4. Application du Padding
+        # Utilisation de torchvision.transforms.functional.pad qui accepte les images PIL
+        # Ordre du padding pour torchvision : (left, top, right, bottom)
+        return F.pad(img, (padding_left, padding_top, padding_right, padding_bottom), self.fill, 'constant')
+
+
+# 2. La fonction adaptée
+def compute_datasets_dataloaders_crowd(dataset_path, batch_size, train_size=0.7, val_size=0.1):
+
+    # Transformation : ResizeWithPad 384 -> Tensor -> Normalize
+    transform = transforms.Compose([
+        ResizeWithPad(target_size=384), # La nouvelle méthode sans déformation
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+    # Chargement du dataset complet
+    full_dataset = ImageFolder(root=dataset_path, transform=transform)
+
+    # Calcul des tailles pour le split
+    total_len = len(full_dataset)
+    train_len = int(train_size * total_len)
+    val_len   = int(val_size * total_len)
+    test_len  = total_len - train_len - val_len  
+
+    # Fixer la seed pour que le split soit toujours le même (reproductibilité)
+    generator = torch.Generator().manual_seed(42)
+
+    # Division aléatoire
+    trainset, valset, testset = random_split(
+        full_dataset, 
+        [train_len, val_len, test_len],
+        generator=generator
+    )
+
+    print(f"--- Dataset Loaded (Resize 384x384 with Padding) ---")
+    print(f"Total: {total_len} images")
+    print(f"Train: {len(trainset)} images")
+    print(f"Val:   {len(valset)} images")
+    print(f"Test:  {len(testset)} images")
+
+    # Création des Dataloaders
+    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True,  num_workers=4)
+    valoader    = DataLoader(valset,   batch_size=batch_size, shuffle=False, num_workers=4)
+    testloader  = DataLoader(testset,  batch_size=batch_size, shuffle=False, num_workers=4)
+
+    return full_dataset, trainset, valset, testset, trainloader, valoader, testloader
+
+
+def plot_dataset_distribution(full_dataset, train_set, val_set, test_set):
+
+    
+    class_names = full_dataset.classes
+    all_targets = np.array(full_dataset.targets)
+    
+    def get_counts(subset, split_name):
+        subset_targets = all_targets[subset.indices]
+        unique, counts = np.unique(subset_targets, return_counts=True)
+        
+        count_dict = {class_names[i]: 0 for i in range(len(class_names))}
+        for idx, count in zip(unique, counts):
+            count_dict[class_names[idx]] = count
+            
+        data = []
+        for cls, count in count_dict.items():
+            data.append({'Classe': cls, 'Nombre': count, 'Set': split_name})
+        return data
+
+
+    data_list = []
+    data_list.extend(get_counts(train_set, 'Train'))
+    data_list.extend(get_counts(val_set, 'Val'))
+    data_list.extend(get_counts(test_set, 'Test'))
+    
+    df = pd.DataFrame(data_list)
+    
+    fig, axes = plt.subplots(2, 1, figsize=(50, 25))
+    
+    df_total = df.groupby('Classe')['Nombre'].sum().reset_index()
+    sns.barplot(data=df_total, x='Classe', y='Nombre', ax=axes[0], palette='viridis')
+    axes[0].set_title("Répartition dataset complet", fontsize=24, pad=20)
+    axes[0].set_ylabel("Nombre d'images",fontsize=20)
+    axes[0].tick_params(axis='x', rotation=45,labelsize=20)
+    axes[0].tick_params(axis='y', labelsize=20)
+    
+    for container in axes[0].containers:
+        axes[0].bar_label(container)
+
+    sns.barplot(data=df, x='Classe', y='Nombre', hue='Set', ax=axes[1], palette='magma')
+    axes[1].set_title("Répartition des classes dans les trainset / valset / testset", fontsize=24, pad=20)
+    axes[1].set_ylabel("Nombre d'images", fontsize=20)
+    axes[1].tick_params(axis='x', rotation=45,labelsize=20)
+    axes[1].tick_params(axis='y', labelsize=20)
+    
+
+    axes[1].legend(fontsize=20, title="Jeux de données", title_fontsize=20)
+    plt.tight_layout()
+    plt.show()
+
+
+    print("--- Récapitulatif ---")
+    print(df.groupby('Set')['Nombre'].sum())
+    
+    
+def compute_datasets_dataloaders_imagenet(dataset_path, batch_size, data_augmentation=False, strong_data_augmentation=False):
+    """
+    Charge Tiny ImageNet en respectant les dossiers existants (train/val).
+    Note: 'val' sert de jeu de test car le dossier 'test' officiel n'a pas de labels.
+    """
+
+    # 1. Définition des constantes de Normalisation (ImageNet standard)
+    mean_stats = [0.485, 0.456, 0.406]
+    std_stats  = [0.229, 0.224, 0.225]
+
+    # 2. Transformation pour la VALIDATION (et TEST)
+    # Juste le redimensionnement et la normalisation. Pas de bruit.
+    transform_val = transforms.Compose([
+        transforms.Resize((224, 224)), # Indispensable pour ViT
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean_stats, std=std_stats)
+    ])
+
+    # 3. Transformation pour l'ENTRAÎNEMENT (Data Augmentation)
+    if strong_data_augmentation:
+        print("Mode: Strong Data Augmentation (RandAugment + Erasing)")
+        transform_train = transforms.Compose([
+            transforms.RandomResizedCrop(224, scale=(0.08, 1.0)),
+            transforms.RandomHorizontalFlip(),
+            # RandAugment : Très efficace pour les Vision Transformers
+            transforms.RandAugment(num_ops=2, magnitude=9), 
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean_stats, std=std_stats),
+            transforms.RandomErasing(p=0.25) 
+        ])
+        
+    elif data_augmentation:
+        print("Mode: Standard Data Augmentation")
+        transform_train = transforms.Compose([
+            transforms.RandomRotation(degrees=10),
+            transforms.RandomResizedCrop(224, scale=(0.08, 1.0)),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean_stats, std=std_stats)
+        ])
+        
+    else:
+        print("Mode: No Data Augmentation (Baseline)")
+        transform_train = transform_val
+
+    # 4. Chargement des données (Mapping Dossiers -> Datasets)
+    # On pointe directement vers les sous-dossiers
+    train_dir = os.path.join(dataset_path, 'train')
+    val_dir = os.path.join(dataset_path, 'val') # (Celui que nous avons trié)
+
+    # ImageFolder scanne les sous-dossiers pour créer les classes automatiquement
+    trainset = datasets.ImageFolder(root=train_dir, transform=transform_train)
+    valset   = datasets.ImageFolder(root=val_dir, transform=transform_val)
+
+    # 5. Création des DataLoaders
+    # num_workers=4 et pin_memory=True pour accélérer le transfert GPU
+    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    valoader    = DataLoader(valset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+
+    # Affichage des infos
+    print("-" * 30)
+    print(f"Chargement depuis : {dataset_path}")
+    print(f"Train images : {len(trainset)} (Classes: {len(trainset.classes)})")
+    print(f"Val images   : {len(valset)}   (Classes: {len(valset.classes)})")
+    print("-" * 30)
+
+    # Note : On ne retourne plus 'testset' car le dossier test officiel est vide de labels.
+    # On utilise 'valset' pour valider ET tester.
+    return trainset, valset, trainloader, valoader
+
+def plot_dataset_distribution_imagenet(train_set, val_set, test_set=None):
+    
+    # On récupère les noms des classes depuis le trainset (supposé complet)
+    class_names = train_set.classes
+    
+    def get_counts(dataset, split_name):
+        if dataset is None:
+            return []
+            
+        # ImageFolder contient directement les targets dans .targets
+        # Plus besoin de passer par des indices
+        targets = np.array(dataset.targets)
+        unique, counts = np.unique(targets, return_counts=True)
+        
+        # On crée un dictionnaire {index: count}
+        counts_map = dict(zip(unique, counts))
+        
+        data = []
+        # On parcourt toutes les classes pour être sûr d'avoir 0 si une classe est manquante
+        for idx, cls_name in enumerate(class_names):
+            count = counts_map.get(idx, 0)
+            data.append({'Classe': cls_name, 'Nombre': count, 'Set': split_name})
+            
+        return data
+
+    # Construction de la liste de données
+    data_list = []
+    data_list.extend(get_counts(train_set, 'Train'))
+    data_list.extend(get_counts(val_set, 'Val (Test)'))
+    
+    # Si un test_set est fourni (optionnel)
+    if test_set is not None:
+        data_list.extend(get_counts(test_set, 'Test'))
+    
+    df = pd.DataFrame(data_list)
+    
+    # --- PLOTTING ---
+    # Note : Pour Tiny ImageNet (200 classes), 50 pouces de large est nécessaire.
+    fig, axes = plt.subplots(2, 1, figsize=(50, 25))
+    
+    # Graphique 1 : Total
+    df_total = df.groupby('Classe')['Nombre'].sum().reset_index()
+    sns.barplot(data=df_total, x='Classe', y='Nombre', ax=axes[0], palette='viridis')
+    axes[0].set_title("Répartition dataset complet", fontsize=24, pad=20)
+    axes[0].set_ylabel("Nombre d'images", fontsize=20)
+    
+    # Gestion de l'affichage des 200 labels (rotation et taille)
+    axes[0].tick_params(axis='x', rotation=90, labelsize=10) # Labelsize réduit pour 200 classes
+    axes[0].tick_params(axis='y', labelsize=20)
+    
+    # Labels sur les barres (optionnel, peut surcharger si 200 classes)
+    # On ne l'active que si c'est lisible
+    if len(class_names) < 50:
+        for container in axes[0].containers:
+            axes[0].bar_label(container)
+
+    # Graphique 2 : Par Split
+    sns.barplot(data=df, x='Classe', y='Nombre', hue='Set', ax=axes[1], palette='magma')
+    axes[1].set_title("Répartition par jeu de données", fontsize=24, pad=20)
+    axes[1].set_ylabel("Nombre d'images", fontsize=20)
+    axes[1].tick_params(axis='x', rotation=90, labelsize=10)
+    axes[1].tick_params(axis='y', labelsize=20)
+    
+    axes[1].legend(fontsize=20, title="Jeu de données", title_fontsize=20)
+    
+    plt.tight_layout()
+    plt.show()
+
+    print("--- Récapitulatif ---")
+    print(df.groupby('Set')['Nombre'].sum())
