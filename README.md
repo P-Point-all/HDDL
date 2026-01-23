@@ -1,3 +1,4 @@
 # HDDL
-Repository for the 3 mini projects of HDDL course 5th year
-Drive pour le modèle : https://drive.google.com/file/d/1fW4SbcpfD8GmpP-fVQbtQZh7P9ytvuRG/view?usp=drive_link
+- Dossier cats-vs-dogs : contient le notebook du mini-projeet 1 ainsi que le sujet
+- Dossier cvae : contient le notebook du mini projet 2 ainsi que le sujet
+- Dossier vit_cnn : contient le notebook du mini projet 3 (`Rapport.ipynb`) ainsi que de nombreux scripts et définitions de fonctions dans différents fichiers. Il y a aussi des dossiers avec les informations d'entrainements et définitions des modèles.
