@@ -1,5 +1,0 @@
-*.pt
-/oxford-iiit-pet
-HDDL/cvae/data/
-/.vscode
-*.pth

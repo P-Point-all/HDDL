@@ -1,0 +1,3 @@
+cvae/data
+cats-vs-dogs/*.pth
+cats-vs-dogs/oxford-iit-pet/
